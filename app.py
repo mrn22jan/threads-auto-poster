@@ -10,7 +10,7 @@ from datetime import datetime, date
 
 # --- ページ設定 ---
 st.set_page_config(page_title="Threads Pro Poster", page_icon="⏰")
-st.title("⏰ Threads 時間帯指定・ツリー時間差投稿")
+st.title("⏰ Threads 賢い自動投稿システム")
 
 if 'running' not in st.session_state: st.session_state.running = False
 if 'logs' not in st.session_state: st.session_state.logs = []
@@ -32,8 +32,7 @@ st.sidebar.header("🎯 投稿スケジュール設定")
 target_hours = st.sidebar.multiselect(
     "投稿を許可する時間帯 (時)", 
     options=list(range(24)), 
-    default=[7, 8, 12, 18, 21],
-    help="選んだ時間帯の中でランダムに1回投稿を開始します。"
+    default=[7, 8, 12, 18, 21]
 )
 max_daily_posts = st.sidebar.slider("1日の最大投稿合計数", 1, 24, 5)
 
@@ -80,8 +79,11 @@ if st.session_state.running:
         current_min = now.minute
         today_str = date.today().isoformat()
         
-        df = pd.DataFrame(sheet.get_all_records())
+        # スプレッドシート読み込み
+        data = sheet.get_all_records(default_black_cell_condition='')
+        df = pd.DataFrame(data)
         
+        # 今日の投稿数をカウント
         if '投稿日時' in df.columns:
             today_df = df[df['投稿日時'].astype(str).str.contains(today_str)]
             today_posts_count = len(today_df)
@@ -97,31 +99,32 @@ if st.session_state.running:
         if today_posts_count >= max_daily_posts:
             msg = "本日の上限に達しました。"
         elif not is_target_hour:
-            msg = f"待機時間外です（次は {min([h for h in target_hours if h > current_hour] or [min(target_hours)])}時台の予定）"
+            msg = "現在は待機時間外です。"
         elif already_posted_this_hour:
-            msg = f"{current_hour}時台は投稿済みです。次を待ちます。"
+            msg = f"{current_hour}時台は投稿済みです。"
         elif current_min < st.session_state.target_minute:
-            msg = f"{current_hour}時台の投稿予定まであと {st.session_state.target_minute - current_min} 分"
+            msg = f"{current_hour}時台の予定まであと {st.session_state.target_minute - current_min} 分"
         else:
-            # 投稿処理
-            pending_rows = df[df['投稿ステータス'] == '未']
+            # 投稿ステータスが空（未入力）の行を探す
+            pending_rows = df[(df['投稿ステータス'] == '') | (df['投稿ステータス'].isna())]
+            
             if pending_rows.empty:
-                msg = "「未」のデータがありません。"
+                msg = "投稿待ち（空欄）のデータがありません。"
             else:
                 target_index = random.choice(pending_rows.index)
                 row_data = df.iloc[target_index]
                 row_num = target_index + 2
                 
                 try:
-                    add_log(f"🚀 親ポスト（本文1）を投稿中...")
+                    add_log(f"🚀 本文1を投稿中...")
                     parent_id = post_to_threads(row_data['本文1'], threads_access_token, threads_user_id)
                     
-                    # ツリー投稿ループ（本文2〜5）
+                    # 本文2以降があるかチェックして投稿
                     for i in range(2, 6):
                         col_name = f'本文{i}'
-                        if col_name in row_data and row_data[col_name]:
-                            # ★ここで5分（300秒）待機
-                            add_log(f"⏳ {col_name} の投稿まで5分間待機します...")
+                        # 列が存在し、かつ中身が空でない場合のみ
+                        if col_name in row_data and str(row_data[col_name]).strip():
+                            add_log(f"⏳ 次のツリー({col_name})まで5分待機...")
                             for wait_sec in range(300, 0, -1):
                                 if not st.session_state.running: break
                                 status_placeholder.warning(f"ツリー投稿待機中: あと {wait_sec // 60}分 {wait_sec % 60}秒")
@@ -129,16 +132,16 @@ if st.session_state.running:
                             
                             if st.session_state.running:
                                 post_to_threads(row_data[col_name], threads_access_token, threads_user_id, reply_to_id=parent_id)
-                                add_log(f"✅ {col_name} を投稿しました。")
+                                add_log(f"✅ {col_name} 投稿完了")
                     
-                    # 完了更新
+                    # ステータス更新
                     now_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     sheet.update_cell(row_num, df.columns.get_loc('投稿ステータス') + 1, '済')
                     sheet.update_cell(row_num, df.columns.get_loc('投稿日時') + 1, now_ts)
-                    add_log("✨ 全スレッドの投稿が完了しました！")
+                    add_log("✨ 全て完了！「済」に更新しました。")
                     
                     st.session_state.target_minute = random.randint(0, 50)
-                    msg = "次の時間帯まで待機します。"
+                    msg = "次の投稿枠まで待機します。"
                 except Exception as e:
                     add_log(f"❌ エラー: {e}")
                     st.session_state.running = False
