@@ -1,8 +1,8 @@
 import streamlit as st
 import gspread
+from google.oauth2.service_account import Credentials
 import requests
 import time
-from google.oauth2.service_account import Credentials
 from datetime import datetime
 
 # 1. 接続設定（StreamlitのSecretsから読み込み）
@@ -11,51 +11,82 @@ SHEET_ID = st.secrets["sheet_id"]
 ACCESS_TOKEN = st.secrets["threads_access_token"]
 THREADS_USER_ID = st.secrets["threads_user_id"]
 
-# 2. 認証処理
+# 2. Googleスプレッドシートの認証
 scope = ["https://www.googleapis.com/auth/spreadsheets"]
 creds = Credentials.from_service_account_info(GOOGLE_JSON, scopes=scope)
 client = gspread.authorize(creds)
 sheet = client.open_by_key(SHEET_ID).sheet1
 
-def post_to_threads(text, reply_to=None):
-    """Threadsに1件投稿し、その投稿IDを返す"""
-    url = f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads"
-    params = {'text': text, 'access_token': ACCESS_TOKEN}
-    if reply_to:
-        params['reply_to_id'] = reply_to
+def post_to_threads(text):
+    """Threadsに投稿し、成功ならIDを、失敗ならエラーメッセージを返す"""
+    # ① 投稿コンテナの作成
+    base_url = f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads"
+    params = {
+        "media_type": "TEXT",
+        "text": text,
+        "access_token": ACCESS_TOKEN
+    }
     
-    # メディアコンテナ作成
-    res = requests.post(url, params=params).json()
-    container_id = res.get('id')
+    res = requests.post(base_url, data=params)
+    res_data = res.json()
     
-    # 公開（Publish）
+    if "id" not in res_data:
+        return False, res_data # 作成失敗
+        
+    container_id = res_data["id"]
+    
+    # ② 投稿の公開
     publish_url = f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads_publish"
-    publish_res = requests.post(publish_url, params={'creation_id': container_id, 'access_token': ACCESS_TOKEN}).json()
-    return publish_res.get('id')
+    publish_params = {
+        "creation_id": container_id,
+        "access_token": ACCESS_TOKEN
+    }
+    
+    # 少し待機（Threads側の反映待ち）
+    time.sleep(2)
+    
+    res_pub = requests.post(publish_url, data=publish_params)
+    res_pub_data = res_pub.json()
+    
+    if "id" in res_pub_data:
+        return True, res_pub_data["id"] # 成功
+    else:
+        return False, res_pub_data # 公開失敗
 
-# 3. 画面表示
+# --- Streamlit UI ---
 st.title("🧵 Threads 投稿マネージャー")
 st.write("ボタンを押すと、スプレッドシートの「投稿ステータス」が空の行をすべて投稿します。")
 
 if st.button("未投稿のものを今すぐ実行"):
-    # 全データを取得
-    records = sheet.get_all_records()
+    data = sheet.get_all_values()
+    headers = data[0]
+    rows = data[1:]
     
-    for i, row in enumerate(records):
-        # 投稿ステータス（F列）が空欄の場合のみ実行
-        if str(row.get("投稿ステータス", "")).strip() == "":
-            st.info(f"{i+2}行目の投稿を開始します...")
-            last_id = None
+    # 列番号の特定（F列:投稿ステータス, G列:投稿日時）
+    status_col_idx = 6 
+    date_col_idx = 7
+    
+    for i, row in enumerate(rows, start=2):
+        text = row[0] # A列:本文1
+        status = row[5] # F列:ステータス
+        
+        if text and not status:
+            st.info(f"{i}行目の投稿を開始します...")
             
-            # 本文1〜5を順番に投稿（スレッドにする）
-            for key in ["本文1", "本文2", "本文3", "本文4", "本文5"]:
-                text = str(row.get(key, "")).strip()
-                if text and text != "None":
-                    last_id = post_to_threads(text, reply_to=last_id)
-                    time.sleep(2) # 連続投稿エラー防止
+            # Threads投稿実行
+            success, result = post_to_threads(text)
             
-            # 完了したらステータスと日時を書き込む
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            sheet.update_cell(i + 2, 6, "完了") # F列
-            sheet.update_cell(i + 2, 7, now_str) # G列
-            st.success(f"{i+2}行目の投稿が完了しました！ ({now_str})")
+            if success:
+                # 成功した時だけシートを更新
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                sheet.update_cell(i, status_col_idx, "完了")
+                sheet.update_cell(i, date_col_idx, now)
+                st.success(f"✅ {i}行目の投稿が完了しました！ (ID: {result})")
+            else:
+                # ❌ 失敗した場合はエラー内容を画面に大きく表示
+                st.error(f"❌ {i}行目でエラーが発生しました。Threads側が拒否しています。")
+                st.json(result) # エラーのJSONをそのまま表示
+                st.warning("このエラーを解消するまで、他の行の投稿を停止します。")
+                break
+    else:
+        st.write("未投稿のデータはありませんでした。")
