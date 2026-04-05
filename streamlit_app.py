@@ -7,14 +7,12 @@ import json
 import os
 from datetime import datetime, timedelta, timezone
 
-# --- 設定ファイルのパス ---
-SETTINGS_FILE = "bot_settings.json"
-
 # 1. 接続設定
 GOOGLE_JSON = st.secrets["google_json"]
 SHEET_ID = st.secrets["sheet_id"]
 ACCESS_TOKEN = st.secrets["threads_access_token"]
 THREADS_USER_ID = st.secrets["threads_user_id"]
+SETTINGS_FILE = "bot_settings.json"
 
 # 2. 認証
 scope = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -28,139 +26,130 @@ def get_jst_now():
 def load_settings():
     if os.path.exists(SETTINGS_FILE):
         try:
-            with open(SETTINGS_FILE, "r") as f:
-                return json.load(f)
+            with open(SETTINGS_FILE, "r") as f: return json.load(f)
         except: pass
     return {"allowed_hours": [9, 12, 15, 18, 21], "max_posts": 5}
 
 def save_settings(settings):
-    with open(SETTINGS_FILE, "w") as f:
-        json.dump(settings, f)
+    with open(SETTINGS_FILE, "w") as f: json.dump(settings, f)
 
 def post_to_threads(text, reply_to_id=None):
+    """コンテナ作成から公開までを完結させ、投稿IDを返す"""
     base_url = f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads"
     payload = {"media_type": "TEXT", "text": text, "access_token": ACCESS_TOKEN}
-    if reply_to_id: payload["reply_to_id"] = reply_to_id
+    if reply_to_id: 
+        payload["reply_to_id"] = reply_to_id
     
-    try:
-        res = requests.post(base_url, data=payload)
-        res_data = res.json()
-        if "id" not in res_data: return False, res_data
-        container_id = res_data["id"]
-        
-        # コンテナ作成後、少し待機してから公開
-        time.sleep(5) 
-        
-        publish_url = f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads_publish"
-        res_pub = requests.post(publish_url, data={"creation_id": container_id, "access_token": ACCESS_TOKEN})
-        res_pub_data = res_pub.json()
-        
-        if "id" in res_pub_data:
-            return True, res_pub_data["id"]
-        else:
-            return False, res_pub_data
-    except Exception as e:
-        return False, str(e)
+    # ① コンテナ作成
+    res = requests.post(base_url, data=payload)
+    res_data = res.json()
+    if "id" not in res_data: return False, res_data
+    container_id = res_data["id"]
+    
+    # Threads側の反映待ち（公式推奨：数秒）
+    time.sleep(10)
+    
+    # ② 公開実行
+    publish_url = f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads_publish"
+    res_pub = requests.post(publish_url, data={"creation_id": container_id, "access_token": ACCESS_TOKEN})
+    res_pub_data = res_pub.json()
+    
+    if "id" in res_pub_data:
+        return True, res_pub_data["id"] # 実際の公開済み投稿IDを返す
+    else:
+        return False, res_pub_data
 
-# --- UI設定 ---
-st.set_page_config(page_title="Threads Auto Bot", layout="wide")
+# --- UI ---
+st.set_page_config(page_title="Threads Bot", layout="wide")
 current_settings = load_settings()
-
 st.sidebar.header("⚙️ 自動投稿ルール")
 new_hours = st.sidebar.multiselect("投稿許可時間（時）※日本時間", options=list(range(24)), default=current_settings["allowed_hours"])
 new_max = st.sidebar.number_input("1日の最大投稿数", min_value=1, max_value=24, value=current_settings["max_posts"])
 
 if new_hours != current_settings["allowed_hours"] or new_max != current_settings["max_posts"]:
     save_settings({"allowed_hours": new_hours, "max_posts": new_max})
-    st.sidebar.success("ルールを更新しました。")
+    st.sidebar.success("設定を保存しました")
 
-st.title("🤖 Threads 自動投稿管理")
+st.title("🤖 Threads 自動投稿管理（厳格間隔モード）")
 
-# --- 🧪 テスト投稿エリア ---
-with st.expander("🧪 手動テスト投稿"):
-    t1 = st.text_area("テスト投稿1")
-    t2 = st.text_area("テスト投稿2（5分後に投稿されます）")
-    if st.button("テスト実行"):
-        s1, r1 = post_to_threads(t1)
-        if s1 and t2:
-            st.info("1つ目成功。5分待機してからツリーを投稿します...")
-            time.sleep(300) # 5分待機
-            s2, r2 = post_to_threads(t2, reply_to_id=r1)
-            if s2: st.success("ツリーまで完了！")
-        elif s1: st.success("投稿完了！")
-
-st.divider()
-
-# --- 🤖 自動投稿 & ログ表示 ---
+# --- データ取得 ---
 jst_now = get_jst_now()
-st.write(f"⌚️ 現在の日本時間: **{jst_now.strftime('%H:%M:%S')}**")
-
-all_rows = sheet.get_all_values()
-header = all_rows[0]
-rows = all_rows[1:]
+all_data = sheet.get_all_values()
+rows = all_data[1:]
 today_str = jst_now.strftime("%Y-%m-%d")
 
-# 今日の投稿データを抽出
 today_posts = []
 last_post_time = None
 
 for row in rows:
-    if len(row) > 6 and today_str in row[6]:
-        today_posts.append({
-            "時間": row[6].split(" ")[1],
-            "本文1": row[0],
-            "ツリー内容": f"{row[1]} / {row[2]}" if row[1] else "なし",
-            "ステータス": "✅ 完了"
-        })
-        # 最後に投稿された時間を取得
+    # 完了 または 投稿中 のものをチェック
+    if len(row) > 6 and row[6] and today_str in row[6]:
+        # 時刻をパース
         p_time = datetime.strptime(row[6], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone(timedelta(hours=9)))
+        if row[5] == "完了":
+            today_posts.append({"時間": row[6].split(" ")[1], "本文1": row[0], "状況": "✅ 完了"})
+        
         if last_post_time is None or p_time > last_post_time:
             last_post_time = p_time
 
-posts_today_count = len(today_posts)
-st.metric("本日の自動投稿済み", f"{posts_today_count} / {new_max}")
-
-# --- 投稿ロジック ---
-# 前回の投稿から60分経過しているかチェック
-can_post_by_interval = True
+# --- 判定：60分間隔 ---
+can_post = True
+diff_min = 0
 if last_post_time:
-    diff = (jst_now - last_post_time).total_seconds() / 60
-    if diff < 60:
-        can_post_by_interval = False
-        st.warning(f"⏳ 次の投稿まであと {int(60 - diff)} 分待機が必要です（間隔60分設定）")
+    diff_sec = (jst_now - last_post_time).total_seconds()
+    if diff_sec < 3600: # 60分 = 3600秒
+        can_post = False
+        diff_min = int((3600 - diff_sec) / 60)
 
-if jst_now.hour in new_hours and posts_today_count < new_max and can_post_by_interval:
+st.write(f"⌚️ 現在の日本時間: **{jst_now.strftime('%H:%M:%S')}**")
+st.metric("本日の投稿数", f"{len(today_posts)} / {new_max}")
+
+# --- メインロジック ---
+if not can_post:
+    st.warning(f"⏳ 次の新規投稿まであと **{diff_min}分** 待機が必要です。")
+elif jst_now.hour not in new_hours:
+    st.info("😴 投稿許可時間外です。")
+elif len(today_posts) >= new_max:
+    st.error("🚫 本日の上限に達しました。")
+else:
+    # 投稿可能な行を探す
     for i, row in enumerate(rows, start=2):
-        if row[0] and not row[5]: # 未投稿を発見
-            st.info(f"🚀 {i}行目の投稿を開始します...")
-            last_id = None
+        if row[0] and not row[5]: # 本文あり 且つ ステータス空
+            st.warning(f"🚀 {i}行目のツリー投稿を開始します（間隔：ツリー間5分）")
+            
+            # 【重要】リロード対策：まずシートに「投稿中」と書いてロックする
+            sheet.update_cell(i, 6, "投稿中...")
+            sheet.update_cell(i, 7, get_jst_now().strftime("%Y-%m-%d %H:%M:%S"))
+            
             valid_texts = [t for t in [row[0], row[1], row[2], row[3], row[4]] if t.strip()]
+            last_id = None
+            all_ok = True
             
             for idx, text in enumerate(valid_texts):
                 if idx > 0:
-                    st.write(f"  ⏳ ツリー投稿のため5分待機中... ({idx}/{len(valid_texts)-1})")
-                    time.sleep(300) # ツリー間隔 5分
+                    # 本文2以降を投げる前に5分待機
+                    st.write(f"  ⏳ ツリー間隔保持のため **5分間待機** します... ({idx}/{len(valid_texts)-1})")
+                    time.sleep(300) 
                 
-                success, res = post_to_threads(text, reply_to_id=last_id)
+                success, res_id = post_to_threads(text, reply_to_id=last_id)
                 if success:
-                    last_id = res
-                    st.write(f"  ✅ {idx+1}つ目の投稿成功")
+                    last_id = res_id
+                    st.write(f"  ✅ 本文{idx+1} 投稿成功")
                 else:
-                    st.error(f"  ❌ 失敗: {res}")
+                    st.error(f"  ❌ 本文{idx+1} でエラー: {res_id}")
+                    all_ok = False
                     break
-            else:
-                # すべて成功した場合のみスプレッドシート更新
+            
+            if all_ok:
                 sheet.update_cell(i, 6, "完了")
-                sheet.update_cell(i, 7, get_jst_now().strftime("%Y-%m-%d %H:%M:%S"))
-                st.success("全てのツリー投稿が完了しました！")
-                st.rerun() # 画面を更新してログに反映
+                st.success("🎊 すべてのツリーが5分間隔で正常に投稿されました！")
+                time.sleep(2)
+                st.rerun()
+            else:
+                sheet.update_cell(i, 6, "失敗あり")
+                st.error("一部の投稿に失敗したため中断しました。")
             break
 
-# --- 今日のログ表示 ---
-st.subheader("📋 本日の投稿履歴")
-if today_posts:
-    st.table(today_posts)
-else:
-    st.write("今日の投稿はまだありません。")
-
-st.caption("※インサイト機能はAPIの制限により現在準備中です。")
+# ログ表示
+st.subheader("📋 本日の履歴")
+if today_posts: st.table(today_posts)
