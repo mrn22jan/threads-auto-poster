@@ -8,29 +8,22 @@ import os
 import hashlib
 from datetime import datetime, timedelta, timezone
 
-# --- 設定 ---
+# --- 設定 (Secrets) ---
 GOOGLE_JSON = st.secrets["google_json"]
 SHEET_ID = st.secrets["sheet_id"]
 ACCESS_TOKEN = st.secrets["threads_access_token"]
 THREADS_USER_ID = st.secrets["threads_user_id"]
 SETTINGS_FILE = "bot_settings.json"
 
-# --- 認証（キャッシュを使用して安定化） ---
+# --- 認証 ---
 @st.cache_resource
 def get_gspread_client():
-    try:
-        scope = ["https://www.googleapis.com/auth/spreadsheets"]
-        creds = Credentials.from_service_account_info(GOOGLE_JSON, scopes=scope)
-        return gspread.authorize(creds)
-    except Exception as e:
-        st.error(f"Google認証エラー: {e}")
-        return None
+    scope = ["https://www.googleapis.com/auth/spreadsheets"]
+    creds = Credentials.from_service_account_info(GOOGLE_JSON, scopes=scope)
+    return gspread.authorize(creds)
 
 client = get_gspread_client()
-if client:
-    sheet = client.open_by_key(SHEET_ID).sheet1
-else:
-    st.stop()
+sheet = client.open_by_key(SHEET_ID).sheet1
 
 def get_jst_now():
     return datetime.now(timezone(timedelta(hours=9)))
@@ -43,43 +36,34 @@ def post_to_threads(text, reply_to_id=None):
     try:
         res = requests.post(base_url, data=payload, timeout=60)
         res_data = res.json()
-        if "id" not in res_data: return False, f"コンテナ作成失敗: {res_data}"
+        if "id" not in res_data: return False, res_data
         container_id = res_data["id"]
         
-        time.sleep(20) # 念のための長め待機
+        # Threads側の反映を待つ
+        time.sleep(20)
         
         publish_url = f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads_publish"
         res_pub = requests.post(publish_url, data={"creation_id": container_id, "access_token": ACCESS_TOKEN}, timeout=60)
-        res_pub_data = res_pub.json()
-        return ("id" in res_pub_data), res_pub_data.get("id")
+        return ("id" in res_pub.json()), res_pub.json().get("id")
     except Exception as e:
         return False, str(e)
 
-# --- UI ---
-st.set_page_config(page_title="チャリンチャリンシステム", layout="wide")
-st.title("💸 ロクレンジャー用Threads 自動投稿管理")
+# --- UI設定 ---
+st.set_page_config(page_title="ロクレンジャー投稿システム", layout="wide")
+st.title("💸チャリンチャリンシステム")
 
-# --- 稼働テスト（ここが重要） ---
-try:
-    # 1行目のJ列（10列目）に最終確認時刻を書き込んでみるテスト
-    test_time = get_jst_now().strftime("%H:%M:%S")
-    sheet.update_cell(1, 10, f"最終接続:{test_time}")
-    st.sidebar.success(f"シート接続OK ({test_time})")
-except Exception as e:
-    st.error(f"⚠️ スプレッドシートへの書き込み権限がありません！共有設定を確認してください: {e}")
-
-# 設定の読み込み
+# 設定読み込み
 if os.path.exists(SETTINGS_FILE):
     with open(SETTINGS_FILE, "r") as f: current_settings = json.load(f)
 else:
     current_settings = {"allowed_hours": [9, 12, 15, 18, 21], "max_posts": 5}
 
-# サイドバー設定
+st.sidebar.header("⚙️ 設定")
 new_hours = st.sidebar.multiselect("投稿許可時間", options=list(range(24)), default=current_settings["allowed_hours"])
-new_max = st.sidebar.number_input("1日の最大投稿数", min_value=1, max_value=24, value=current_settings["max_posts"])
-if st.sidebar.button("設定保存"):
+new_max = st.sidebar.number_input("1日の最大投稿数", 1, 24, current_settings["max_posts"])
+if st.sidebar.button("設定を保存"):
     with open(SETTINGS_FILE, "w") as f: json.dump({"allowed_hours": new_hours, "max_posts": new_max}, f)
-    st.sidebar.info("保存しました。")
+    st.sidebar.success("保存しました")
 
 # --- データ解析 ---
 jst_now = get_jst_now()
@@ -93,21 +77,23 @@ last_post_time = None
 allowed_hours = sorted(new_hours)
 
 for i, row in enumerate(rows, start=2):
+    # 履歴
     if len(row) > 6 and row[6] and today_str in row[6]:
         try:
             p_time = datetime.strptime(row[6], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone(timedelta(hours=9)))
-            if row[5]: today_posts.append({"時間": row[6].split(" ")[1], "本文1": row[0], "状態": row[5]})
-            if last_post_time is None or p_time > last_post_time: last_post_time = p_time
+            if row[5]:
+                today_posts.append({"時間": row[6].split(" ")[1], "本文1": row[0][:30], "状態": row[5]})
+            if last_post_time is None or p_time > last_post_time:
+                last_post_time = p_time
         except: pass
-    
+    # 予定
     status = row[5] if len(row) > 5 else ""
     if row[0] and not status:
-        slot_idx = len(today_posts) + len(future_schedule)
-        if slot_idx < len(allowed_hours) and slot_idx < new_max:
-            t_hour = allowed_hours[slot_idx]
-            t_min = int(hashlib.md5(f"{today_str}_{i}".encode()).hexdigest(), 16) % 60
-            sched_time = jst_now.replace(hour=t_hour, minute=t_min, second=0, microsecond=0)
-            future_schedule.append({"row_idx": i, "time": sched_time, "data": row})
+        idx = len(today_posts) + len(future_schedule)
+        if idx < len(allowed_hours) and idx < new_max:
+            h = allowed_hours[idx]
+            m = int(hashlib.md5(f"{today_str}_{i}".encode()).hexdigest(), 16) % 60
+            future_schedule.append({"row": i, "time": jst_now.replace(hour=h, minute=m, second=0), "data": row})
 
 st.metric("今日の投稿数", f"{len(today_posts)} / {new_max}")
 
@@ -116,46 +102,62 @@ can_post = True
 if last_post_time and (jst_now - last_post_time).total_seconds() < 3600:
     can_post = False
 
+# --- 投稿実行 ---
 if future_schedule:
-    next_task = future_schedule[0]
-    if jst_now >= next_task["time"] and can_post and len(today_posts) < new_max:
-        st.warning(f"🚀 {next_task['time'].strftime('%H:%M')} の投稿を開始")
-        r_idx = next_task["row_idx"]
-        r_data = next_task["data"]
+    task = future_schedule[0]
+    if jst_now >= task["time"] and can_post and len(today_posts) < new_max:
+        st.warning(f"🚀 {task['time'].strftime('%H:%M')} の投稿を開始します...")
+        r_idx = task["row"]
         
-        # ★ 投稿前に時間を書き込む
+        # 記録開始
         sheet.update_cell(r_idx, 7, get_jst_now().strftime("%Y-%m-%d %H:%M:%S"))
-        sheet.update_cell(r_idx, 6, "1本目送信中...")
+        sheet.update_cell(r_idx, 6, "1本目送信中")
         
-        valid_texts = [t for t in r_data[0:5] if t.strip()]
+        texts = [t for t in task["data"][0:5] if t.strip()]
         last_id = None
-        success_count = 0
+        count = 0
         
-        for idx, text in enumerate(valid_texts):
+        for idx, txt in enumerate(texts):
             if idx > 0:
                 p_hold = st.empty()
                 for t in range(300, 0, -1):
-                    p_hold.info(f"⏳ 待機中: あと {t // 60}分 {t % 60}秒")
+                    p_hold.info(f"⏳ ツリー連結待機中... あと {t//60}分{t%60}秒 ({idx}/{len(texts)-1})")
                     time.sleep(1)
                 p_hold.empty()
             
-            success, res_id = post_to_threads(text, reply_to_id=last_id)
-            if success:
-                last_id = res_id
-                success_count += 1
-                sheet.update_cell(r_idx, 6, f"{success_count}本完了")
+            ok, res = post_to_threads(txt, last_id)
+            if ok:
+                last_id = res
+                count += 1
+                sheet.update_cell(r_idx, 6, f"{count}本完了")
             else:
-                sheet.update_cell(r_idx, 6, f"エラー:{res_id[:10]}")
+                sheet.update_cell(r_idx, 6, f"エラー:{str(res)[:10]}")
                 break
         
-        if success_count == len(valid_texts):
+        if count == len(texts):
             sheet.update_cell(r_idx, 6, "完了")
+            st.success("✅ すべてのツリーが正常に投稿されました！")
+            st.balloons()
+            time.sleep(5)
             st.rerun()
+    elif not is_time if 'is_time' in locals() else jst_now < task["time"]:
+        st.write(f"📅 次の予定: **{task['time'].strftime('%H:%M')}**")
     elif not can_post:
-        st.info("⏳ 前回の投稿から60分間隔を空けるために待機中です。")
-    else:
-        st.write(f"⏳ 次の予定: **{next_task['time'].strftime('%H:%M')}**")
+        st.info("⏳ 1時間の間隔を空けるために待機しています")
 
 st.divider()
-st.subheader("📋 履歴と予定")
-st.table(today_posts) if today_posts else st.write("本日の履歴なし")
+
+# --- 履歴と予定の表示 (修正版) ---
+tab1, tab2 = st.tabs(["📋 本日の履歴", "📅 本日の予定"])
+with tab1:
+    if today_posts:
+        st.table(today_posts)
+    else:
+        st.write("本日の履歴はありません。")
+
+with tab2:
+    if future_schedule:
+        disp_sch = [{"予定時間": t["time"].strftime("%H:%M"), "本文1": t["data"][0][:40]} for t in future_schedule]
+        st.table(disp_sch)
+    else:
+        st.write("本日の予定はありません。")
