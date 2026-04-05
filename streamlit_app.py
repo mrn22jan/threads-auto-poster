@@ -34,9 +34,6 @@ def save_settings(settings):
     with open(SETTINGS_FILE, "w") as f: json.dump(settings, f)
 
 def post_to_threads(text, reply_to_id=None):
-    if len(text) > 500:
-        return False, "文字数が500文字を超えています"
-    
     base_url = f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads"
     payload = {"media_type": "TEXT", "text": text, "access_token": ACCESS_TOKEN}
     if reply_to_id: payload["reply_to_id"] = reply_to_id
@@ -45,7 +42,7 @@ def post_to_threads(text, reply_to_id=None):
     res_data = res.json()
     if "id" not in res_data: return False, res_data
     container_id = res_data["id"]
-    time.sleep(10) # 安定公開のための待機
+    time.sleep(10)
     
     publish_url = f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads_publish"
     res_pub = requests.post(publish_url, data={"creation_id": container_id, "access_token": ACCESS_TOKEN})
@@ -85,10 +82,11 @@ for row in rows:
                 today_posts.append({"時間": row[6].split(" ")[1], "本文1": row[0]})
             if last_post_time is None or p_time > last_post_time:
                 last_post_time = p_time
-        except:
-            pass
-    # 予定取得
-    if len(row) > 0 and row[0] and (len(row) <= 5 or not row[5]):
+        except: pass
+    
+    # 予定取得 (ステータス列が空のもの)
+    status = row[5] if len(row) > 5 else ""
+    if row[0] and not status:
         future_posts.append(row)
 
 # --- 投稿間隔チェック ---
@@ -100,30 +98,21 @@ if last_post_time:
         can_post = False
         wait_seconds = int(3600 - diff_sec)
 
-# --- ステータス表示 ---
-col1, col2 = st.columns(2)
-with col1:
-    st.metric("今日の投稿数", f"{len(today_posts)} / {new_max}")
-with col2:
-    stock_count = len(future_posts)
-    if stock_count <= 3:
-        st.warning(f"⚠️ 弾切れ注意！未投稿ネタが残り **{stock_count}** 件です")
-    else:
-        st.success(f"✅ ネタ在庫：残り **{stock_count}** 件")
+# --- 表示 ---
+st.metric("今日の投稿数", f"{len(today_posts)} / {new_max}")
 
 # --- 自動投稿ロジック ---
 if not can_post:
-    st.warning(f"⏳ チャージ中... 次の投稿まであと **{wait_seconds // 60}分 {wait_seconds % 60}秒** （自動で投稿されます）")
+    st.warning(f"⏳ 次の投稿まであと **{wait_seconds // 60}分 {wait_seconds % 60}秒** です")
 elif jst_now.hour not in new_hours:
-    st.info(f"💤 待機時間。次のチャンスは {min([h for h in new_hours if h > jst_now.hour] or [min(new_hours)])}時 です。")
+    st.info(f"😴 待機時間。次の許可時間は {min([h for h in new_hours if h > jst_now.hour] or [min(new_hours)])}時 です。")
 elif len(today_posts) >= new_max:
     st.error("🚫 本日の最大投稿数に達しました。")
 else:
     for i, row in enumerate(rows, start=2):
-        # ステータス列（F列 = index 5）が空のものを探す
         status = row[5] if len(row) > 5 else ""
         if row[0] and not status:
-            st.info(f"🚀 {i}行目の投稿を開始しました。5分おきにツリーを繋げます...")
+            st.info(f"🚀 {i}行目の投稿を開始しました...")
             sheet.update_cell(i, 6, "投稿中...")
             sheet.update_cell(i, 7, get_jst_now().strftime("%Y-%m-%d %H:%M:%S"))
             
@@ -143,11 +132,11 @@ else:
                     last_id = res_id
                     st.write(f"✅ 本文{idx+1} 成功")
                 else:
-                    st.error(f"❌ 本文{idx+1} 失敗: {res_id}")
+                    st.error(f"❌ 本文{idx+1} 失敗")
                     break
             else:
                 sheet.update_cell(i, 6, "完了")
-                st.success("💰 全ての投稿が完了しました！チャリンチャリン！")
+                st.success("✅ 投稿完了されました")
                 st.balloons()
                 time.sleep(5)
                 st.rerun()
@@ -155,20 +144,23 @@ else:
 
 st.divider()
 
-# --- 📋 本日の履歴と予定 ---
-tab1, tab2 = st.tabs(["📋 本日の投稿履歴", "📅 今後の投稿予定"])
+# --- 履歴と予定 ---
+st.subheader("📋 本日の投稿履歴")
+if today_posts: st.table(today_posts)
+else: st.write("本日の履歴はありません。")
 
-with tab1:
-    if today_posts: st.table(today_posts)
-    else: st.write("本日の履歴はまだありません。")
-
-with tab2:
-    if future_posts:
-        display_future = []
-        next_time = jst_now if can_post else (last_post_time + timedelta(hours=1))
-        for idx, post in enumerate(future_posts):
-            est_time = (next_time + timedelta(hours=idx)).strftime("%m/%d %H:%M頃")
-            cd = "準備完了" if (idx==0 and can_post) else f"約{idx}〜{idx+1}時間後"
-            display_future.append({"目安時間": est_time, "メイン内容": post[0][:30], "ツリー数": sum(1 for x in post[1:5] if len(post) > x and post[x].strip()), "状態": cd})
-        st.table(display_future)
-    else: st.write("予定はありません。スプレッドシートを補充してください。")
+st.subheader("📅 本日の予定")
+if future_posts:
+    display_future = []
+    next_time = jst_now if can_post else (last_post_time + timedelta(hours=1))
+    for idx, post in enumerate(future_posts):
+        est_time = (next_time + timedelta(hours=idx)).strftime("%m/%d %H:%M頃")
+        cd = "準備完了" if (idx==0 and can_post) else f"約{idx}〜{idx+1}時間後"
+        display_future.append({
+            "予定時間": est_time, 
+            "本文1": post[0][:30], 
+            "カウントダウン": cd
+        })
+    st.table(display_future)
+else:
+    st.write("予定はありません。")
