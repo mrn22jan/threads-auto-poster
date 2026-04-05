@@ -79,13 +79,16 @@ last_post_time = None
 for row in rows:
     # 履歴取得
     if len(row) > 6 and row[6] and today_str in row[6]:
-        p_time = datetime.strptime(row[6], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone(timedelta(hours=9)))
-        if row[5] == "完了":
-            today_posts.append({"時間": row[6].split(" ")[1], "本文1": row[0]})
-        if last_post_time is None or p_time > last_post_time:
-            last_post_time = p_time
+        try:
+            p_time = datetime.strptime(row[6], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone(timedelta(hours=9)))
+            if row[5] == "完了":
+                today_posts.append({"時間": row[6].split(" ")[1], "本文1": row[0]})
+            if last_post_time is None or p_time > last_post_time:
+                last_post_time = p_time
+        except:
+            pass
     # 予定取得
-    if row[0] and not row[5]:
+    if len(row) > 0 and row[0] and (len(row) <= 5 or not row[5]):
         future_posts.append(row)
 
 # --- 投稿間隔チェック ---
@@ -100,12 +103,13 @@ if last_post_time:
 # --- ステータス表示 ---
 col1, col2 = st.columns(2)
 with col1:
-    st.metric("今日の稼ぎ（投稿数）", f"{len(today_posts)} / {new_max}")
+    st.metric("今日の投稿数", f"{len(today_posts)} / {new_max}")
 with col2:
-    if len(future_posts) <= 3:
-        st.warning(f"⚠️ 弾切れ注意！未投稿ネタが残り **{len(future_posts)}** 件です")
+    stock_count = len(future_posts)
+    if stock_count <= 3:
+        st.warning(f"⚠️ 弾切れ注意！未投稿ネタが残り **{stock_count}** 件です")
     else:
-        st.success(f"✅ ネタ在庫：残り {len(future_stock := len(future_posts))} 件")
+        st.success(f"✅ ネタ在庫：残り **{stock_count}** 件")
 
 # --- 自動投稿ロジック ---
 if not can_post:
@@ -113,10 +117,12 @@ if not can_post:
 elif jst_now.hour not in new_hours:
     st.info(f"💤 待機時間。次のチャンスは {min([h for h in new_hours if h > jst_now.hour] or [min(new_hours)])}時 です。")
 elif len(today_posts) >= new_max:
-    st.error("🚫 本日の最大利益（投稿数）に達しました。")
+    st.error("🚫 本日の最大投稿数に達しました。")
 else:
     for i, row in enumerate(rows, start=2):
-        if row[0] and not row[5]:
+        # ステータス列（F列 = index 5）が空のものを探す
+        status = row[5] if len(row) > 5 else ""
+        if row[0] and not status:
             st.info(f"🚀 {i}行目の投稿を開始しました。5分おきにツリーを繋げます...")
             sheet.update_cell(i, 6, "投稿中...")
             sheet.update_cell(i, 7, get_jst_now().strftime("%Y-%m-%d %H:%M:%S"))
@@ -163,6 +169,6 @@ with tab2:
         for idx, post in enumerate(future_posts):
             est_time = (next_time + timedelta(hours=idx)).strftime("%m/%d %H:%M頃")
             cd = "準備完了" if (idx==0 and can_post) else f"約{idx}〜{idx+1}時間後"
-            display_future.append({"目安時間": est_time, "メイン内容": post[0][:30], "ツリー数": sum(1 for x in post[1:5] if x.strip()), "状態": cd})
+            display_future.append({"目安時間": est_time, "メイン内容": post[0][:30], "ツリー数": sum(1 for x in post[1:5] if len(post) > x and post[x].strip()), "状態": cd})
         st.table(display_future)
     else: st.write("予定はありません。スプレッドシートを補充してください。")
