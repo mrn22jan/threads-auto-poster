@@ -67,7 +67,7 @@ if new_hours != current_settings["allowed_hours"] or new_max != current_settings
     save_settings({"allowed_hours": new_hours, "max_posts": new_max})
     st.sidebar.success("設定を更新しました")
 
-st.title("💸 ロクレンジャー用Threads 自動投稿管理チャリンチャリンシステム")
+st.title("💸チャリンチャリンシステム")
 
 # --- データ取得 & スケジュール構築 ---
 jst_now = get_jst_now()
