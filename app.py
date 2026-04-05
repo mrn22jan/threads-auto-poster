@@ -5,150 +5,149 @@ from google.oauth2.service_account import Credentials
 import requests
 import time
 import random
-import logging
-from datetime import datetime
-
-# --- ロギング設定 ---
-logging.basicConfig(level=logging.INFO)
+import json
+from datetime import datetime, date
 
 # --- ページ設定 ---
-st.set_page_config(page_title="Threads Auto-Poster", page_icon="📝")
-st.title("🚀 Threads 自動投稿システム")
+st.set_page_config(page_title="Threads Pro Poster", page_icon="⏰")
+st.title("⏰ Threads 時間帯指定・ツリー時間差投稿")
 
-# --- セッション状態の初期化 ---
-if 'running' not in st.session_state:
-    st.session_state.running = False
-if 'logs' not in st.session_state:
-    st.session_state.logs = []
+if 'running' not in st.session_state: st.session_state.running = False
+if 'logs' not in st.session_state: st.session_state.logs = []
+if 'target_minute' not in st.session_state: st.session_state.target_minute = random.randint(0, 50)
 
 def add_log(message):
-    now = datetime.now().strftime("%H:%M:%S")
+    now = datetime.now().strftime("%m/%d %H:%M:%S")
     st.session_state.logs.append(f"[{now}] {message}")
-    if len(st.session_state.logs) > 50:
-        st.session_state.logs.pop(0)
+    if len(st.session_state.logs) > 50: st.session_state.logs.pop(0)
 
-# --- サイドバー：設定 ---
-st.sidebar.header("⚙️ 設定")
+# --- サイドバー：詳細設定 ---
+st.sidebar.header("⚙️ 基本設定")
 spreadsheet_id = st.sidebar.text_input("スプレッドシートID")
 threads_access_token = st.sidebar.text_input("Threads Access Token", type="password")
-threads_user_id = st.sidebar.text_input("Threads User ID (数値)")
+threads_user_id = st.sidebar.text_input("Threads User ID")
+uploaded_file = st.sidebar.file_uploader("Google Credentials (JSON)", type="json")
 
-st.sidebar.subheader("⏳ 待機時間設定 (分)")
-min_wait = st.sidebar.number_input("最小待機時間", value=15, min_value=1)
-max_wait = st.sidebar.number_input("最大待機時間", value=60, min_value=min_wait)
+st.sidebar.header("🎯 投稿スケジュール設定")
+target_hours = st.sidebar.multiselect(
+    "投稿を許可する時間帯 (時)", 
+    options=list(range(24)), 
+    default=[7, 8, 12, 18, 21],
+    help="選んだ時間帯の中でランダムに1回投稿を開始します。"
+)
+max_daily_posts = st.sidebar.slider("1日の最大投稿合計数", 1, 24, 5)
 
-uploaded_file = st.sidebar.file_uploader("Google Credentials (JSON) をアップロード", type="json")
-
-# --- API連携関数 ---
-def get_gspread_client(json_file):
+# --- API関数 ---
+def get_gspread_client(json_info):
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-    creds = Credentials.from_service_account_info(json_file, scopes=scopes)
+    creds = Credentials.from_service_account_info(json_info, scopes=scopes)
     return gspread.authorize(creds)
 
 def post_to_threads(text, access_token, user_id, reply_to_id=None):
     url = f"https://graph.threads.net/v1.0/{user_id}/threads"
-    params = {
-        'media_type': 'TEXT',
-        'text': text,
-        'access_token': access_token
-    }
-    if reply_to_id:
-        params['reply_to_id'] = reply_to_id
-    
-    # メディアコンテナ作成
-    res = requests.post(url, params=params)
-    res_data = res.json()
-    if 'id' not in res_data:
-        raise Exception(f"Container Error: {res_data}")
-    
-    creation_id = res_data['id']
-    
-    # 公開
-    publish_url = f"https://graph.threads.net/v1.0/{user_id}/threads_publish"
-    publish_params = {'creation_id': creation_id, 'access_token': access_token}
-    pub_res = requests.post(publish_url, params=publish_params)
-    pub_data = pub_res.json()
-    
-    if 'id' not in pub_data:
-        raise Exception(f"Publish Error: {pub_data}")
-    return pub_data['id']
+    params = {'media_type': 'TEXT', 'text': text, 'access_token': access_token}
+    if reply_to_id: params['reply_to_id'] = reply_to_id
+    res = requests.post(url, params=params).json()
+    if 'id' not in res: raise Exception(f"Container Error: {res}")
+    pub_res = requests.post(f"https://graph.threads.net/v1.0/{user_id}/threads_publish", 
+                            params={'creation_id': res['id'], 'access_token': access_token}).json()
+    return pub_res.get('id')
 
-# --- メインロジック ---
+# --- メイン実行 ---
 col1, col2 = st.columns(2)
-start_btn = col1.button("実行開始", use_container_width=True, type="primary")
-stop_btn = col2.button("停止", use_container_width=True)
-
-if stop_btn:
-    st.session_state.running = False
-    st.warning("停止コマンドを受け付けました。現在の処理終了後に停止します。")
-
-if start_btn:
-    if not (spreadsheet_id and threads_access_token and uploaded_file and threads_user_id):
-        st.error("すべての設定項目を入力し、JSONファイルをアップロードしてください。")
+if col1.button("実行開始", use_container_width=True, type="primary"):
+    if not (spreadsheet_id and threads_access_token and uploaded_file):
+        st.error("設定が足りません")
     else:
         st.session_state.running = True
         add_log("システムを起動しました。")
 
-# 実行ループ
+if col2.button("停止", use_container_width=True):
+    st.session_state.running = False
+    st.warning("停止します...")
+
 if st.session_state.running:
     status_placeholder = st.empty()
     log_placeholder = st.empty()
     
-    import json
     service_account_info = json.load(uploaded_file)
     gc = get_gspread_client(service_account_info)
     sheet = gc.open_by_key(spreadsheet_id).get_worksheet(0)
 
     while st.session_state.running:
-        data = sheet.get_all_records()
-        df = pd.DataFrame(data)
+        now = datetime.now()
+        current_hour = now.hour
+        current_min = now.minute
+        today_str = date.today().isoformat()
         
-        # 「投稿ステータス」が「未」の行を抽出
-        pending_rows = df[df['投稿ステータス'] == '未']
+        df = pd.DataFrame(sheet.get_all_records())
         
-        if pending_rows.empty:
-            add_log("「未」のデータがありません。待機中...")
-            time.sleep(30)
-            continue
-        
-        # ランダムに1件選択
-        target_index = random.choice(pending_rows.index)
-        row_data = df.iloc[target_index]
-        row_num = target_index + 2 # スプレッドシートの行番号 (ヘッダー+0始まり補正)
+        if '投稿日時' in df.columns:
+            today_df = df[df['投稿日時'].astype(str).str.contains(today_str)]
+            today_posts_count = len(today_df)
+            already_posted_this_hour = any(pd.to_datetime(today_df['投稿日時']).dt.hour == current_hour)
+        else:
+            today_posts_count = 0
+            already_posted_this_hour = False
 
-        try:
-            add_log(f"{row_num}行目の投稿を開始します。")
-            
-            # 親ポスト投稿
-            parent_id = post_to_threads(row_data['本文1'], threads_access_token, threads_user_id)
-            
-            # ツリー投稿（本文2, 本文3...がある場合）
-            for i in range(2, 11): # 最大本文10まで対応
-                col_name = f'本文{i}'
-                if col_name in row_data and row_data[col_name]:
-                    time.sleep(2) # APIの安定のため少し待機
-                    post_to_threads(row_data[col_name], threads_access_token, threads_user_id, reply_to_id=parent_id)
-            
-            # ステータス更新
-            sheet.update_cell(row_num, df.columns.get_loc('投稿ステータス') + 1, '済')
-            add_log("投稿成功！ステータスを「済」に更新しました。")
-            
-        except Exception as e:
-            add_log(f"エラー発生: {e}")
-            st.session_state.running = False
-            break
+        status_placeholder.metric("今日の進捗", f"{today_posts_count} / {max_daily_posts} 件")
 
-        # ランダム待機
-        wait_time = random.randint(min_wait * 60, max_wait * 60)
-        add_log(f"次の投稿まで {wait_time // 60} 分待機します...")
+        is_target_hour = current_hour in target_hours
         
-        # 待機時間を分割して表示更新
-        for s in range(wait_time, 0, -1):
-            if not st.session_state.running: break
-            status_placeholder.info(f"⏳ 次の投稿まであと {s // 60} 分 {s % 60} 秒")
-            log_placeholder.code("\n".join(st.session_state.logs[::-1]))
-            time.sleep(1)
+        if today_posts_count >= max_daily_posts:
+            msg = "本日の上限に達しました。"
+        elif not is_target_hour:
+            msg = f"待機時間外です（次は {min([h for h in target_hours if h > current_hour] or [min(target_hours)])}時台の予定）"
+        elif already_posted_this_hour:
+            msg = f"{current_hour}時台は投稿済みです。次を待ちます。"
+        elif current_min < st.session_state.target_minute:
+            msg = f"{current_hour}時台の投稿予定まであと {st.session_state.target_minute - current_min} 分"
+        else:
+            # 投稿処理
+            pending_rows = df[df['投稿ステータス'] == '未']
+            if pending_rows.empty:
+                msg = "「未」のデータがありません。"
+            else:
+                target_index = random.choice(pending_rows.index)
+                row_data = df.iloc[target_index]
+                row_num = target_index + 2
+                
+                try:
+                    add_log(f"🚀 親ポスト（本文1）を投稿中...")
+                    parent_id = post_to_threads(row_data['本文1'], threads_access_token, threads_user_id)
+                    
+                    # ツリー投稿ループ（本文2〜5）
+                    for i in range(2, 6):
+                        col_name = f'本文{i}'
+                        if col_name in row_data and row_data[col_name]:
+                            # ★ここで5分（300秒）待機
+                            add_log(f"⏳ {col_name} の投稿まで5分間待機します...")
+                            for wait_sec in range(300, 0, -1):
+                                if not st.session_state.running: break
+                                status_placeholder.warning(f"ツリー投稿待機中: あと {wait_sec // 60}分 {wait_sec % 60}秒")
+                                time.sleep(1)
+                            
+                            if st.session_state.running:
+                                post_to_threads(row_data[col_name], threads_access_token, threads_user_id, reply_to_id=parent_id)
+                                add_log(f"✅ {col_name} を投稿しました。")
+                    
+                    # 完了更新
+                    now_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    sheet.update_cell(row_num, df.columns.get_loc('投稿ステータス') + 1, '済')
+                    sheet.update_cell(row_num, df.columns.get_loc('投稿日時') + 1, now_ts)
+                    add_log("✨ 全スレッドの投稿が完了しました！")
+                    
+                    st.session_state.target_minute = random.randint(0, 50)
+                    msg = "次の時間帯まで待機します。"
+                except Exception as e:
+                    add_log(f"❌ エラー: {e}")
+                    st.session_state.running = False
+                    break
 
-# ログの表示
+        status_placeholder.info(f"状態: {msg}")
+        log_placeholder.code("\n".join(st.session_state.logs[::-1]))
+        time.sleep(60)
+
+# ログ表示
 st.subheader("📝 実行ログ")
 st.code("\n".join(st.session_state.logs[::-1]))
