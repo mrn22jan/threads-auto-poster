@@ -84,7 +84,7 @@ def load_settings():
 
 # --- 3. UI・初期化 ---
 st.set_page_config(page_title="Threads自動投稿", layout="wide")
-st.title("🧵 チャリンチャリンシステム")
+st.title("🧵 Threadsツリー完全管理システム")
 
 client = get_client()
 sheet = client.open_by_key(SHEET_ID).sheet1
