@@ -214,7 +214,8 @@ if schedule:
     task = schedule[0]
     task_status = task["status"]
     completed_count = parse_completed_count(task_status)
-    is_resuming = completed_count > 0
+    valid_resume_status = task_status.strip().endswith("本完了") and completed_count > 0
+    is_resuming = valid_resume_status
     texts = [t for t in task["data"][0:5] if t.strip()]
 
     last_exec_time = None
@@ -242,12 +243,14 @@ if schedule:
 
     if ready_for_new_thread or ready_for_next_reply:
         idx = completed_count
-        current_tid = task["data"][7] if len(task["data"]) > 7 and task["data"][7] else None
+        saved_parent_tid = task["data"][7] if len(task["data"]) > 7 and task["data"][7] else None
+        current_tid = saved_parent_tid if valid_resume_status else None
         current_link = task["data"][9] if len(task["data"]) > 9 else ""
+        reply_to_id = current_tid if idx > 0 else None
         status_area = st.empty()
 
         status_area.info(f"📤 {idx+1}本目を投稿中...")
-        ok, res_id, permalink = post_to_threads(texts[idx], current_tid)
+        ok, res_id, permalink = post_to_threads(texts[idx], reply_to_id)
 
         if ok:
             current_tid = res_id
