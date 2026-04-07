@@ -29,14 +29,8 @@ def get_client():
 def send_line(msg):
     """LINE Messaging API：1本ごとの詳細実況をマリンさんのスマホへ飛ばす"""
     url = "https://api.line.me/v2/bot/message/push"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {LINE_CHANNEL_TOKEN}"
-    }
-    payload = {
-        "to": LINE_USER_ID,
-        "messages": [{"type": "text", "text": f"【Threads Bot実況】\n{msg}"}]
-    }
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {LINE_CHANNEL_TOKEN}"}
+    payload = {"to": LINE_USER_ID, "messages": [{"type": "text", "text": f"【Threads Bot実況】\n{msg}"}]}
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=15)
         return res.status_code == 200
@@ -44,7 +38,7 @@ def send_line(msg):
         return False
 
 def update_sheet_safe(sheet, row, col, val):
-    """Googleシートへの書き込みを3回まで粘り強くリトライする"""
+    """Googleシートへの書き込みを3回までリトライ"""
     for i in range(3):
         try:
             sheet.update_cell(row, col, val)
@@ -54,32 +48,32 @@ def update_sheet_safe(sheet, row, col, val):
     return False
 
 def post_to_threads(text, reply_to_id=None):
-    """Threadsへの投稿（コンテナ作成 → 35秒待機 → 公開）"""
+    """Threadsへの投稿（コンテナ作成 → 待機 → 公開 → Permalink取得）"""
     base_url = f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads"
     payload = {"media_type": "TEXT", "text": text, "access_token": ACCESS_TOKEN}
-    if reply_to_id:
-        payload["reply_to_id"] = reply_to_id
+    if reply_to_id: payload["reply_to_id"] = reply_to_id
     
     try:
-        # コンテナ作成
         res = requests.post(base_url, data=payload, timeout=60)
-        res_data = res.json()
-        cid = res_data.get("id")
-        if not cid:
-            return False, f"API拒否:{res_data.get('error',{}).get('message','不明')}"
+        cid = res.json().get("id")
+        if not cid: return False, f"API拒否:{res.json()}", ""
         
-        # Threads側のメディア処理待ち（35秒）
-        time.sleep(35)
+        time.sleep(35) # Threads側の生成待機
         
-        # 公開
         pub_url = f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads_publish"
         res_pub = requests.post(pub_url, data={"creation_id": cid, "access_token": ACCESS_TOKEN}, timeout=60)
-        pub_res = res_pub.json()
-        if "id" in pub_res:
-            return True, pub_res["id"]
-        return False, f"公開失敗:{pub_res.get('error',{}).get('message','不明')}"
+        pid = res_pub.json().get("id")
+        
+        if pid:
+            # 【新規】正しいリンク（Permalink）をAPIから取得する
+            perm_url = f"https://graph.threads.net/v1.0/{pid}?fields=permalink&access_token={ACCESS_TOKEN}"
+            perm_res = requests.get(perm_url).json()
+            permalink = perm_res.get("permalink", f"https://www.threads.net/t/{pid}")
+            return True, pid, permalink
+        
+        return False, "公開失敗", ""
     except Exception as e:
-        return False, f"通信エラー:{str(e)[:20]}"
+        return False, str(e), ""
 
 def load_settings():
     if os.path.exists(SETTINGS_FILE):
@@ -90,30 +84,25 @@ def load_settings():
 
 # --- 3. UI・初期化 ---
 st.set_page_config(page_title="Threads自動投稿", layout="wide")
-st.title("🧵 Threadsツリー完全管理システム [究極マスター版]")
+st.title("🧵 チャリンチャリンシステム")
 
 client = get_client()
 sheet = client.open_by_key(SHEET_ID).sheet1
 jst_now = datetime.now(timezone(timedelta(hours=9)))
 today_str = jst_now.strftime("%Y-%m-%d")
 
-# --- 4. サイドバー：設定・テスト・通知確認 ---
+# --- 4. サイドバー設定 ---
 conf = load_settings()
 st.sidebar.header("⚙️ システム設定")
 new_h = st.sidebar.multiselect("投稿許可時間 (時)", list(range(24)), default=conf["allowed_hours"])
 new_m = st.sidebar.number_input("1日の最大投稿数", 1, 24, conf["max_posts"])
 if st.sidebar.button("設定を永久保存"):
-    with open(SETTINGS_FILE, "w") as f:
-        json.dump({"allowed_hours": new_h, "max_posts": new_m}, f)
-    st.sidebar.success("設定ファイルを更新しました")
+    with open(SETTINGS_FILE, "w") as f: json.dump({"allowed_hours": new_h, "max_posts": new_m}, f)
+    st.sidebar.success("保存完了")
 
-st.sidebar.divider()
-st.sidebar.header("🔔 LINE通知テスト")
-if st.sidebar.button("今すぐLINEにテスト送信"):
-    if send_line("テスト通知です！これが届けばアクセストークン設定は完璧です。"):
-        st.sidebar.success("送信成功！")
-    else:
-        st.sidebar.error("送信失敗。公式アカウントの友だち追加を確認してください。")
+# LINEテストボタン
+if st.sidebar.button("🔔 LINEにテスト送信"):
+    if send_line("リンク取得テストを含めた、正常な通知の確認です。"): st.sidebar.success("成功！")
 
 st.sidebar.divider()
 st.sidebar.header("🧪 指定行テスト投稿")
@@ -124,31 +113,26 @@ if st.sidebar.button("🚀 指定行でテスト実行"):
         if test_data and test_data[0]:
             texts = [t for t in test_data[0:5] if t.strip()]
             prog = st.empty()
-            tid, first_url = None, ""
+            tid, final_link = None, ""
             for idx, txt in enumerate(texts):
                 if idx > 0:
                     for t in range(300, 0, -1):
-                        prog.warning(f"⏳ 【テスト中】連結待機中 ({idx}/{len(texts)}本完了)\nあと **{t}** 秒で次を投稿します...")
+                        prog.warning(f"⏳ 【テスト】連結待機中 ({idx}/{len(texts)})\nあと **{t}** 秒...")
                         time.sleep(1)
                 prog.info(f"📤 {idx+1}本目を投稿中...")
-                ok, res = post_to_threads(txt, tid)
+                ok, res_id, link = post_to_threads(txt, tid)
                 if ok:
-                    tid = res
-                    if idx == 0: first_url = f"https://www.threads.net/t/{res}"
+                    tid = res_id
+                    if idx == 0: final_link = link
                     update_sheet_safe(sheet, test_row_idx, 6, f"テスト中:{idx+1}本完了")
-                    send_line(f"🧪テスト実況: {idx+1}/{len(texts)}本目 成功！\nリンク(1本目): {first_url}")
+                    send_line(f"🧪テスト実況: {idx+1}/{len(texts)}本目 成功！\n🔗リンク: {final_link}")
                     st.write(f"✅ {idx+1}本目 成功")
                 else:
-                    st.error(f"❌ 失敗: {res}")
-                    send_line(f"❌テスト失敗: {res}")
-                    break
-            else:
-                update_sheet_safe(sheet, test_row_idx, 6, "テスト完了")
-                send_line(f"🎊テスト完遂しました！\n{first_url}")
-                st.balloons()
+                    st.error(f"❌ 失敗: {res_id}"); send_line(f"❌失敗: {res_id}"); break
+            send_line(f"🎊テスト完遂！\n{final_link}")
     except Exception as e: st.sidebar.error(f"エラー: {e}")
 
-# --- 5. データ解析（全枠埋め・リアルタイム反映） ---
+# --- 5. データ解析 ---
 all_rows = sheet.get_all_values()
 data_rows = all_rows[1:]
 history, last_t = [], None
@@ -156,22 +140,18 @@ available_data = []
 
 for i, r in enumerate(data_rows, start=2):
     status = r[5] if len(r) > 5 else ""
-    # 今日の「完了」履歴
     if len(r) > 6 and r[6] and today_str in r[6] and "完了" in status:
         history.append(r)
         try:
             pt = datetime.strptime(r[6], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone(timedelta(hours=9)))
             if not last_t or pt > last_t: last_t = pt
         except: pass
-    # 未投稿、または再開待ちデータ
     elif r[0] and "完了" not in status:
         available_data.append({"row": i, "data": r, "status": status})
 
-# サイドバーの最新設定をリアルタイム適用
 allowed_slots = sorted(new_h)[:new_m]
 schedule = []
 used_count = len(history)
-
 for i, t_info in enumerate(available_data):
     idx = used_count + i
     if idx < len(allowed_slots):
@@ -180,12 +160,11 @@ for i, t_info in enumerate(available_data):
         stime = jst_now.replace(hour=h, minute=m, second=0, microsecond=0)
         schedule.append({"row": t_info['row'], "time": stime, "data": t_info['data'], "status": t_info['status']})
 
-# --- 6. 自動投稿実行（60分・5分・再開・リンク実況） ---
-st.metric("今日の完了状況", f"{len(history)} / {new_m} 枠")
+# --- 6. 自動投稿実行（リンク取得強化版） ---
+st.metric("今日の状況", f"{len(history)} / {new_m} 完了")
 
 if schedule:
     task = schedule[0]
-    # 60分ルール：前のスレッド開始から3600秒経過しているか
     time_gap = (jst_now - last_t).total_seconds() if last_t else 9999
     is_resuming = "本完了" in task["status"]
     
@@ -196,67 +175,57 @@ if schedule:
         
         start_idx = 0
         current_tid = None
-        first_id = task["data"][8] if len(task["data"]) > 8 else None
+        current_link = task["data"][9] if len(task["data"]) > 9 else "" # I列(10番目)にリンク保存
         
-        # 再開（レジューム）処理
         if is_resuming:
             start_idx = int(task["status"].replace("本完了", ""))
             current_tid = task["data"][7] if len(task["data"]) > 7 else None
-            send_line(f"🔄 再開します: {start_idx + 1}本目から投稿(行:{task['row']})")
+            send_line(f"🔄 再開: {start_idx+1}本目から(行:{task['row']})")
         else:
-            send_line(f"🎬 投稿開始: 全{len(texts)}本のツリー予定(行:{task['row']})")
+            send_line(f"🎬 開始: 全{len(texts)}本(行:{task['row']})")
 
         for idx in range(start_idx, len(texts)):
             if idx > 0:
-                # ツリー内の5分待機（前回の更新時刻から計算）
+                # 最終更新からの待機時間を計算
                 try:
-                    l_time = datetime.strptime(sheet.cell(task['row'], 7).value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone(timedelta(hours=9)))
+                    l_val = sheet.cell(task['row'], 7).value
+                    l_time = datetime.strptime(l_val, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone(timedelta(hours=9)))
                     elap = (datetime.now(timezone(timedelta(hours=9))) - l_time).total_seconds()
                 except: elap = 0
                 rem = int(300 - elap)
                 if rem > 0:
                     for t in range(rem, 0, -1):
-                        status_area.warning(f"🕒 ツリー連結待機中 ({idx}/{len(texts)}本完了)\nあと **{t}** 秒...")
+                        status_area.warning(f"🕒 ツリー待機中 ({idx}/{len(texts)}本目完了) あと **{t}** 秒...")
                         time.sleep(1)
             
             status_area.info(f"📤 {idx+1}本目を投稿中...")
-            ok, res_id = post_to_threads(texts[idx], current_tid)
+            ok, res_id, permalink = post_to_threads(texts[idx], current_tid)
             
             if ok:
                 current_tid = res_id
-                if idx == 0: first_id = res_id
+                if idx == 0: current_link = permalink
                 
-                # スプレッドシートを即時更新（確実性を高めるリトライ付き）
+                # スプレッドシート更新
                 update_sheet_safe(sheet, task["row"], 6, f"{idx+1}本完了")
                 update_sheet_safe(sheet, task["row"], 7, datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M:%S"))
-                update_sheet_safe(sheet, task["row"], 8, current_tid)
-                update_sheet_safe(sheet, task["row"], 9, first_id)
+                update_sheet_safe(sheet, task["row"], 8, current_tid) # H列
+                update_sheet_safe(sheet, task["row"], 10, current_link) # J列(10番目)に正式URL保存
                 
-                # 1本ごとにLINEで実況
-                post_url = f"https://www.threads.net/t/{first_id}"
-                send_line(f"📈 実況: {idx+1}/{len(texts)}本目 成功！\n内容: {texts[idx][:15]}...\nリンク: {post_url}")
+                send_line(f"📈 実況: {idx+1}/{len(texts)}本目 成功\n🔗URL: {current_link}")
                 st.write(f"✅ {idx+1}本目 完了")
             else:
-                err = str(res_id)[:20]
-                update_sheet_safe(sheet, task["row"], 6, f"エラー:{err}")
-                send_line(f"⚠️ エラー発生 行:{task['row']} 内容:{err}"); break
+                update_sheet_safe(sheet, task["row"], 6, f"エラー:{res_id[:10]}")
+                send_line(f"⚠️ エラー: {res_id}"); break
         else:
             update_sheet_safe(sheet, task["row"], 6, "完了")
-            send_line(f"🎉 ツリー完遂しました！\nhttps://www.threads.net/t/{first_id}")
+            send_line(f"🎉 完遂しました！\n{current_link}")
             st.rerun()
     elif time_gap < 3600 and not is_resuming:
-        st.info(f"⏳ 60分間隔ルール待機中（あと {int((3600-time_gap)/60)} 分）")
+        st.info(f"⏳ 60分ルール待機中（あと {int((3600-time_gap)/60)} 分）")
     else:
-        # 未来の予定を表示
-        display_schedule = [s for s in schedule if s["time"] > jst_now]
-        if display_schedule:
-            st.info(f"📅 次回予定: **{display_schedule[0]['time'].strftime('%H:%M')}** ({display_schedule[0]['row']}行目)")
-        else:
-            st.warning("🌙 今日の予定枠はすべて終了しました。")
+        st.info(f"📅 次回: **{task['time'].strftime('%H:%M')}**")
 
 st.divider()
 t1, t2 = st.tabs(["📋 今日の履歴", "📅 これからの予定"])
 with t1: st.table([{"時間": r[6].split(" ")[1] if len(r)>6 else "-", "内容": r[0][:20], "状態": r[5]} for r in history])
-with t2:
-    display_sched = [{"行": s["row"], "時間": s["time"].strftime("%H:%M"), "内容": s["data"][0][:20], "状態": s["status"] if s["status"] else "予約中"} for s in schedule if s["time"] > jst_now]
-    st.table(display_sched if display_sched else [{"予定": "なし"}])
+with t2: st.table([{"行": s["row"], "時間": s["time"].strftime("%H:%M"), "内容": s["data"][0][:20]} for s in schedule if s["time"] > jst_now])
