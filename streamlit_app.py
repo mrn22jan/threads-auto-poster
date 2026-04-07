@@ -121,6 +121,10 @@ def parse_completed_count(status):
     return 0
 
 
+def is_test_status(status):
+    return (status or "").strip().startswith("テスト")
+
+
 # --- 3. UI・初期化 ---
 st.set_page_config(page_title="Threads自動投稿", layout="wide")
 st.title("🧵 Threadsツリー管理システム [Public安全運用版]")
@@ -193,8 +197,15 @@ for i, r in enumerate(data_rows, start=2):
                 last_t = pt
         except Exception:
             pass
-    elif r and r[0] and status.strip() != "完了":
+    elif r and r[0] and status.strip() != "完了" and not is_test_status(status):
         available_data.append({"row": i, "data": r, "status": status})
+
+available_data.sort(
+    key=lambda x: (
+        0 if parse_completed_count(x["status"]) > 0 else 1,
+        x["row"],
+    )
+)
 
 allowed_slots = sorted(new_h)[:new_m]
 schedule = []
