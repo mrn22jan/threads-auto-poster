@@ -185,7 +185,7 @@ available_data = []
 
 for i, r in enumerate(data_rows, start=2):
     status = r[5] if len(r) > 5 else ""
-    if len(r) > 6 and r[6] and today_str in r[6] and "完了" in status:
+    if len(r) > 6 and r[6] and today_str in r[6] and status.strip() == "完了":
         history.append(r)
         try:
             pt = datetime.strptime(r[6], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone(timedelta(hours=9)))
@@ -193,7 +193,7 @@ for i, r in enumerate(data_rows, start=2):
                 last_t = pt
         except Exception:
             pass
-    elif r and r[0] and "完了" not in status:
+    elif r and r[0] and status.strip() != "完了":
         available_data.append({"row": i, "data": r, "status": status})
 
 allowed_slots = sorted(new_h)[:new_m]
