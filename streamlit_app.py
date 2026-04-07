@@ -199,11 +199,17 @@ if st.sidebar.button("🚀 指定行でテスト実行"):
 all_rows = sheet.get_all_values()
 data_rows = all_rows[1:]
 history, last_t = [], None
+today_activity = []
 available_data = []
 
 for i, r in enumerate(data_rows, start=2):
     status = r[5] if len(r) > 5 else ""
-    if len(r) > 6 and r[6] and today_str in r[6] and status.strip() == "完了":
+    has_today_timestamp = len(r) > 6 and r[6] and today_str in r[6]
+
+    if has_today_timestamp and not is_test_status(status):
+        today_activity.append({"row": i, "data": r, "status": status})
+
+    if has_today_timestamp and status.strip() == "完了":
         history.append(r)
         try:
             pt = datetime.strptime(r[6], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone(timedelta(hours=9)))
@@ -221,19 +227,61 @@ available_data.sort(
     )
 )
 
+today_activity.sort(
+    key=lambda x: x["data"][6] if len(x["data"]) > 6 and x["data"][6] else "",
+    reverse=True,
+)
+
 allowed_slots = sorted(new_h)[:new_m]
 schedule = []
 used_count = len(history)
+slot_count = max(1, len(allowed_slots))
+
 for i, t_info in enumerate(available_data):
-    idx = used_count + i
-    if idx < len(allowed_slots):
-        h = allowed_slots[idx]
-        m = int(hashlib.md5(f"{today_str}_{t_info['row']}".encode()).hexdigest(), 16) % 60
-        stime = jst_now.replace(hour=h, minute=m, second=0, microsecond=0)
-        schedule.append({"row": t_info["row"], "time": stime, "data": t_info["data"], "status": t_info["status"]})
+    status = t_info["status"]
+    texts = [t for t in t_info["data"][0:5] if t.strip()]
+    completed_count = parse_completed_count(status)
+    last_exec_time = None
+
+    if len(t_info["data"]) > 6 and t_info["data"][6]:
+        try:
+            last_exec_time = datetime.strptime(t_info["data"][6], "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=timezone(timedelta(hours=9))
+            )
+        except Exception:
+            last_exec_time = None
+
+    if completed_count > 0 and completed_count < len(texts):
+        stime = (last_exec_time + timedelta(seconds=REPLY_INTERVAL_SECONDS)) if last_exec_time else jst_now
+        schedule_type = "続き"
+    else:
+        idx = used_count + i
+        slot_idx = idx % slot_count
+        day_offset = idx // slot_count
+        base_day = jst_now + timedelta(days=day_offset)
+        h = allowed_slots[slot_idx]
+        key_date = base_day.strftime("%Y-%m-%d")
+        m = int(hashlib.md5(f"{key_date}_{t_info['row']}".encode()).hexdigest(), 16) % 60
+        stime = base_day.replace(hour=h, minute=m, second=0, microsecond=0)
+        schedule_type = "新規"
+
+    schedule.append({
+        "row": t_info["row"],
+        "time": stime,
+        "data": t_info["data"],
+        "status": status,
+        "kind": schedule_type,
+    })
 
 # --- 6. 自動投稿実行 ---
 st.metric("今日の状況", f"{len(history)} / {new_m} 完了")
+
+new_stock_rows = [x for x in available_data if parse_completed_count(x["status"]) == 0 and not x["status"].startswith("エラー")]
+new_stock_count = len(new_stock_rows)
+stock_alert_threshold = max(3, new_m * 2)
+if new_stock_count <= stock_alert_threshold:
+    approx_days = (new_stock_count / new_m) if new_m else 0
+    st.warning(f"⚠️ 投稿ストックが少なめです。新規投稿候補は残り {new_stock_count} 件（約 {approx_days:.1f} 日分）です。")
 
 if schedule:
     task = schedule[0]
@@ -311,17 +359,28 @@ if schedule:
     else:
         display_schedule = [s for s in schedule if s["time"] > jst_now]
         if display_schedule:
-            st.info(f"📅 次回: **{display_schedule[0]['time'].strftime('%H:%M')}**")
+            st.info(f"📅 次回: **{display_schedule[0]['time'].strftime('%m/%d %H:%M')}**")
 
 st.divider()
 t1, t2 = st.tabs(["📋 今日の履歴", "📅 これからの予定"])
 with t1:
     st.table([
-        {"時間": r[6].split(" ")[1] if len(r) > 6 and r[6] else "-", "内容": r[0][:20], "状態": r[5] if len(r) > 5 else ""}
-        for r in history
+        {
+            "行": x["row"],
+            "時間": x["data"][6].split(" ")[1] if len(x["data"]) > 6 and x["data"][6] else "-",
+            "内容": x["data"][0][:20],
+            "状態": x["status"] if x["status"] else "-",
+        }
+        for x in today_activity
     ])
 with t2:
     st.table([
-        {"行": s["row"], "時間": s["time"].strftime("%H:%M"), "内容": s["data"][0][:20]}
-        for s in schedule if s["time"] > jst_now
+        {
+            "行": s["row"],
+            "予定": s["time"].strftime("%m/%d %H:%M"),
+            "種別": s["kind"],
+            "状態": s["status"] if s["status"] else "新規",
+            "内容": s["data"][0][:20],
+        }
+        for s in schedule
     ])
