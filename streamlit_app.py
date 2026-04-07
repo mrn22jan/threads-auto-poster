@@ -31,7 +31,7 @@ def get_client():
 def send_line(msg):
     """LINE実況通知：Secretsから取得した情報で送信"""
     if not LINE_CHANNEL_TOKEN or not LINE_USER_ID:
-        return False
+        return False, "LINE Secrets未設定"
 
     url = "https://api.line.me/v2/bot/message/push"
     headers = {
@@ -44,9 +44,18 @@ def send_line(msg):
     }
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=15)
-        return res.status_code == 200
-    except Exception:
-        return False
+        if res.status_code == 200:
+            return True, "OK"
+        return False, f"LINE API {res.status_code}: {res.text[:120]}"
+    except Exception as e:
+        return False, f"LINE送信例外: {e}"
+
+
+def notify_line(msg, status_area=None):
+    ok, detail = send_line(msg)
+    if not ok and status_area is not None:
+        status_area.warning(f"⚠️ LINE通知失敗: {detail}")
+    return ok, detail
 
 
 def update_sheet_safe(sheet, row, col, val):
@@ -145,10 +154,11 @@ if st.sidebar.button("設定を永久保存"):
     st.sidebar.success("保存完了")
 
 if st.sidebar.button("🔔 LINEにテスト送信"):
-    if send_line("Secrets設定を使用した通知テストです。"):
+    ok, detail = send_line("Secrets設定を使用した通知テストです。")
+    if ok:
         st.sidebar.success("成功！")
     else:
-        st.sidebar.error("失敗。Secretsを確認してください。")
+        st.sidebar.error(f"失敗: {detail}")
 
 st.sidebar.divider()
 st.sidebar.header("🧪 指定行テスト投稿")
@@ -172,12 +182,16 @@ if st.sidebar.button("🚀 指定行でテスト実行"):
                     if idx == 0:
                         final_link = link
                     update_sheet_safe(sheet, test_row_idx, 6, f"テスト中:{idx+1}本完了")
-                    send_line(f"🧪実況: {idx+1}/{len(texts)}本目 成功！\n🔗URL: {final_link}")
+                    line_ok, line_detail = notify_line(f"🧪実況: {idx+1}/{len(texts)}本目 成功！\n🔗URL: {final_link}")
+                    if not line_ok:
+                        st.warning(f"LINE通知失敗: {line_detail}")
                     st.write(f"✅ {idx+1}本目 成功")
                 else:
                     st.error(f"❌ 失敗: {res_id}")
                     break
-            send_line(f"🎊テスト完遂！\n{final_link}")
+            line_ok, line_detail = notify_line(f"🎊テスト完遂！\n{final_link}")
+            if not line_ok:
+                st.warning(f"LINE通知失敗: {line_detail}")
     except Exception as e:
         st.sidebar.error(f"エラー: {e}")
 
@@ -275,17 +289,17 @@ if schedule:
 
             if idx == len(texts) - 1:
                 update_sheet_safe(sheet, task["row"], 6, "完了")
-                send_line(f"🎉 完遂しました！\n{current_link}")
+                line_ok, line_detail = notify_line(f"🎉 完遂しました！\n{current_link}", status_area)
                 st.success(f"✅ {idx+1}/{len(texts)}本目を投稿し、スレッド完了にしました。")
             else:
                 update_sheet_safe(sheet, task["row"], 6, f"{idx+1}本完了")
-                send_line(f"📈 実況: {idx+1}/{len(texts)}本目 成功\n🔗URL: {current_link}")
+                line_ok, line_detail = notify_line(f"📈 実況: {idx+1}/{len(texts)}本目 成功\n🔗URL: {current_link}", status_area)
                 st.success(
                     f"✅ {idx+1}/{len(texts)}本目を投稿しました。次回は {REPLY_INTERVAL_SECONDS} 秒後以降に続きを投稿します。"
                 )
         else:
             update_sheet_safe(sheet, task["row"], 6, f"エラー:{res_id[:40]}")
-            send_line(f"⚠️ エラー: {res_id}")
+            line_ok, line_detail = notify_line(f"⚠️ エラー: {res_id}", status_area)
             st.error(f"❌ 投稿失敗: {res_id}")
 
     elif is_resuming and completed_count < len(texts):
