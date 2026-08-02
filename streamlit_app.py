@@ -8,6 +8,8 @@ import os
 import hashlib
 from datetime import datetime, timedelta, timezone
 
+import threads_audit
+
 # --- 1. 安全な設定取得（すべてSecretsから読み込む） ---
 LINE_CHANNEL_TOKEN = st.secrets.get("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_USER_ID = st.secrets.get("LINE_USER_ID")
@@ -362,7 +364,7 @@ if schedule:
             st.info(f"📅 次回: **{display_schedule[0]['time'].strftime('%m/%d %H:%M')}**")
 
 st.divider()
-t1, t2 = st.tabs(["📋 今日の履歴", "📅 これからの予定"])
+t1, t2, t3 = st.tabs(["📋 今日の履歴", "📅 これからの予定", "🔍 投稿点検"])
 with t1:
     st.table([
         {
@@ -384,3 +386,64 @@ with t2:
         }
         for s in schedule
     ])
+with t3:
+    st.caption("Threads APIで直接確認するため、ブラウザのログイン状態は不要です。")
+    col_a, col_b = st.columns(2)
+    audit_hours = col_a.number_input("遡る時間 (h)", min_value=1, max_value=168, value=24)
+    exclude_input = col_b.text_input(
+        "商品投稿から除外するキーワード（カンマ区切り）",
+        value=",".join(threads_audit.DEFAULT_EXCLUDE_KEYWORDS),
+    )
+    send_to_line = st.checkbox("点検結果をLINEに送る", value=False)
+
+    if st.button("🔍 点検を実行"):
+        exclude_keywords = [k.strip() for k in exclude_input.split(",") if k.strip()]
+        since_dt = jst_now - timedelta(hours=int(audit_hours))
+        targets = [
+            (i, r)
+            for i, r in enumerate(data_rows, start=2)
+            if r and len(r) > 6 and r[6] and not is_test_status(r[5] if len(r) > 5 else "")
+        ]
+
+        with st.spinner("Threads APIから取得中..."):
+            results = threads_audit.audit_sheet_rows(
+                ACCESS_TOKEN, targets, exclude_keywords, since_dt
+            )
+
+        if not results:
+            st.info("対象期間に投稿済みのスレッドがありません。")
+        else:
+            summary = threads_audit.summarize(results)
+            m1, m2, m3 = st.columns(3)
+            m1.metric("点検スレッド", summary["checked"])
+            m2.metric("ツリー欠落", len(summary["tree_gaps"]))
+            m3.metric("ad/リンク欠落", len(summary["ad_issues"]))
+
+            st.table([
+                {
+                    "行": r["row"],
+                    "投稿": r["posted_at"][11:16] if len(r["posted_at"]) > 15 else "-",
+                    "内容": r["title"],
+                    "本数": f"{r['posted_count']}/{r['expected_count']}",
+                    "ad": "○" if r["has_ad"] else ("－" if not r["is_product"] else "×"),
+                    "リンク": "○" if r["has_link"] else ("－" if not r["is_product"] else "×"),
+                    "リプ": len(r["pending_replies"]),
+                    "備考": r["error"] or "",
+                }
+                for r in results
+            ])
+
+            report = threads_audit.format_report(results, jst_now)
+            st.code(report)
+
+            for r in summary["pending"]:
+                with st.expander(f"💬 行{r['row']} {r['title']} の読者リプ {len(r['pending_replies'])} 件"):
+                    for rep in r["pending_replies"]:
+                        st.write(f"@{rep['username']}: {rep['text']}")
+
+            if send_to_line:
+                ok, detail = notify_line(report)
+                if ok:
+                    st.success("LINEに送信しました。")
+                else:
+                    st.warning(f"LINE通知失敗: {detail}")
