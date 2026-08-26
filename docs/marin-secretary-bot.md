@@ -14,7 +14,7 @@ Claude のルーティン（定期タスク）からの Slack 通知は、Slack 
 
 既存アプリを使うので新規作成は不要。トークンの確認だけ行う。
 
-1. https://api.slack.com/apps → 「TikTok朝ブリーフ」アプリを開く
+1. https://api.slack.com/apps → 「マリン秘書bot」(旧TikTok朝ブリーフ)アプリを開く
 2. **OAuth & Permissions** → **Bot Token Scopes** に以下があるか確認、無ければ追加:
    - `chat:write`
    - `chat:write.public`（公開チャンネルに招待なしで投稿）
@@ -25,7 +25,7 @@ Claude のルーティン（定期タスク）からの Slack 通知は、Slack 
    - claude.ai/code → 環境（Environment）の設定 → Environment variables に
      `SLACK_MARIN_BOT_TOKEN = xoxb-...` を追加
 5. 非公開チャンネル（例: #kondate-memo）に投稿させたい場合は、そのチャンネルで
-   `/invite @TikTok朝ブリーフ` を実行しておく
+   `/invite @マリン秘書bot` を実行しておく
 
 ## ルーティンからの使い方
 

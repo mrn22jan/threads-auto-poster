@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 「マリン秘書bot」として Slack にメッセージを投稿するヘルパー。
-# 送信には既存の Slack アプリ「TikTok朝ブリーフ」の Bot Token を使い、
-# 表示名だけ「マリン秘書bot」に上書きする（chat:write.customize が必要）。
+# 送信にはSlack アプリ「マリン秘書bot」(旧TikTok朝ブリーフ) の Bot Token を使う。
+# アプリ名自体がマリン秘書botのため表示名の上書きは不要。
 #
 # 使い方:
 #   SLACK_MARIN_BOT_TOKEN=xoxb-... ./notify_marin_bot.sh "#チャンネル名" "メッセージ本文"
