@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# マリン秘書bot として Slack にメッセージを投稿するヘルパー。
+# 「マリン秘書bot」として Slack にメッセージを投稿するヘルパー。
+# 送信には既存の Slack アプリ「TikTok朝ブリーフ」の Bot Token を使い、
+# 表示名だけ「マリン秘書bot」に上書きする（chat:write.customize が必要）。
+#
 # 使い方:
 #   SLACK_MARIN_BOT_TOKEN=xoxb-... ./notify_marin_bot.sh "#チャンネル名" "メッセージ本文"
+#
 # チャンネルはチャンネルID (C0XXXXXXX) でも #名前 でも可。
-# 事前条件: Slack アプリ「マリン秘書bot」の Bot Token (scopes: chat:write, chat:write.public)。
-# 非公開チャンネルへは事前に /invite @マリン秘書bot が必要。
+# 非公開チャンネルへは事前に /invite @TikTok朝ブリーフ が必要。
+# 表示名/アイコンは環境変数 MARIN_BOT_USERNAME / MARIN_BOT_ICON で変更可能。
 
 set -euo pipefail
 
@@ -17,10 +21,17 @@ fi
 
 channel="$1"
 message="$2"
+username="${MARIN_BOT_USERNAME:-マリン秘書bot}"
+icon="${MARIN_BOT_ICON:-:woman_office_worker:}"
 
-payload=$(python3 - "$channel" "$message" <<'PY'
+payload=$(python3 - "$channel" "$message" "$username" "$icon" <<'PY'
 import json, sys
-print(json.dumps({"channel": sys.argv[1], "text": sys.argv[2]}))
+print(json.dumps({
+    "channel": sys.argv[1],
+    "text": sys.argv[2],
+    "username": sys.argv[3],
+    "icon_emoji": sys.argv[4],
+}))
 PY
 )
 
@@ -34,4 +45,4 @@ if [[ "$ok" != "True" ]]; then
   echo "Slack 投稿に失敗しました: $res" >&2
   exit 1
 fi
-echo "マリン秘書bot から投稿しました: $channel"
+echo "${username} として投稿しました: $channel"
