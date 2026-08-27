@@ -5,55 +5,49 @@
 Claude のルーティン（定期タスク）からの Slack 通知は、Slack コネクタ（MCP）経由だと
 **本人のアカウントからの投稿**になってしまい、自分の投稿には Slack の通知が鳴らない。
 
-これを解決するため、ワークスペースに既にインストール済みの Slack アプリ
-**「TikTok朝ブリーフ」** の Bot Token を流用し、投稿時に表示名を
-**「マリン秘書bot」** に上書きして通知を送る。bot からの投稿なら通常のメッセージと
-同じように通知が届く。
+これを解決するため、Slack アプリ **「マリン秘書bot」**（旧 TikTok朝ブリーフ、App ID
+A0B6JSY5X9A）の Bot Token で `chat.postMessage` を直接呼んで通知を送る。
+bot からの投稿なら通常のメッセージと同じように通知が届く。
 
-## 初回セットアップ（1回だけ）
+## 前提（設定済み）
 
-既存アプリを使うので新規作成は不要。トークンの確認だけ行う。
+- Slack アプリ「マリン秘書bot」に Bot Token Scopes: `chat:write`, `chat:write.public`
+- Install to Workspace 済み → Bot User OAuth Token（`xoxb-...`）発行済み
+- 非公開チャンネル（例: #kondate-memo）に投稿する場合のみ、そのチャンネルで
+  `/invite @マリン秘書bot` が必要（公開チャンネルは不要）
 
-1. https://api.slack.com/apps → 「マリン秘書bot」(旧TikTok朝ブリーフ)アプリを開く
-2. **OAuth & Permissions** → **Bot Token Scopes** に以下があるか確認、無ければ追加:
-   - `chat:write`
-   - `chat:write.public`（公開チャンネルに招待なしで投稿）
-   - `chat:write.customize`（表示名を「マリン秘書bot」に上書きするため）
-   - スコープを追加した場合は **Reinstall to Workspace** で再インストール
-3. 同ページの **Bot User OAuth Token**（`xoxb-` で始まる）をコピー
-4. トークンを Claude Code の実行環境の環境変数に登録:
-   - claude.ai/code → 環境（Environment）の設定 → Environment variables に
-     `SLACK_MARIN_BOT_TOKEN = xoxb-...` を追加
-5. 非公開チャンネル（例: #kondate-memo）に投稿させたい場合は、そのチャンネルで
-   `/invite @マリン秘書bot` を実行しておく
+## ルーティン／タスクへの組み込み方
 
-## ルーティンからの使い方
-
-各ルーティンのプロンプトで、Slack コネクタでの送信の代わりに以下を指示する:
+通知を送っている各ルーティン（Cowork のスケジュールタスクなど）の指示文で、
+「Slack で通知する」の部分を以下に置き換える。`<BOT_TOKEN>` は実際の
+`xoxb-` トークンに置き換えること（トークンは Slack アプリの
+OAuth & Permissions ページでいつでも確認できる）。
 
 ```
-Slack への通知は Slack コネクタ（MCP）を使わず、必ず「マリン秘書bot」として送ること。
-環境変数 SLACK_MARIN_BOT_TOKEN を使い、次の curl で chat.postMessage を呼ぶ:
+【Slack通知のルール】
+Slackへの通知はSlackコネクタ(MCP)を使わず、必ず「マリン秘書bot」名義で送ること。
+Bash で次の curl を実行して chat.postMessage を呼ぶ:
 
 curl -sS -X POST https://slack.com/api/chat.postMessage \
-  -H "Authorization: Bearer $SLACK_MARIN_BOT_TOKEN" \
+  -H "Authorization: Bearer <BOT_TOKEN>" \
   -H "Content-Type: application/json; charset=utf-8" \
-  --data '{"channel": "#チャンネル名", "text": "通知本文", "username": "マリン秘書bot", "icon_emoji": ":woman_office_worker:"}'
+  --data '{"channel": "#通知先チャンネル", "text": "通知本文"}'
 
-レスポンスの "ok": true を確認すること。
+応答の "ok": true を確認し、false ならエラー内容を報告する。
+本文は Slack の mrkdwn（*太字* など）が使える。
 ```
 
-このリポジトリを clone しているセッションなら、ヘルパースクリプトも使える:
+## 実行環境ごとの注意
 
-```bash
-./scripts/notify_marin_bot.sh "#たらこ日次パフォーマンス" "本日のレポートです..."
-```
+- **Cowork（Mac のデスクトップアプリ）のタスク**: そのまま動く（ネットワーク制限なし）。
+- **claude.ai/code のクラウド環境で動くルーティン**: 環境のネットワークポリシーが
+  「制限付き」だと slack.com に接続できない。環境設定（入力欄上の雲アイコン → 環境の
+  歯車 → Network access）で Full にするか slack.com を許可し、Environment variables に
+  `SLACK_MARIN_BOT_TOKEN=xoxb-...` を登録すれば、このリポジトリの
+  `scripts/notify_marin_bot.sh` がそのまま使える。
 
-## 補足
+## セキュリティ
 
-- `username` / `icon_emoji` の上書きには `chat:write.customize` スコープが必要。
-  無い場合はアプリ本来の名前（TikTok朝ブリーフ）で投稿される。
-- 装飾は Slack の mrkdwn（`*太字*`、`> 引用` など）が使える。`text` に含めればよい。
-- トークンはプロンプトに直接書かず、必ず環境変数で渡す。
-- Cowork（デスクトップ）のスケジュールタスクなど別環境で動くルーティンにも、
-  同じ curl スニペット＋トークンを環境変数か指示文で渡せば同様に使える。
+- トークンを公開リポジトリや公開の場に書かないこと（このドキュメントにも書かない）。
+- 漏れた疑いがあれば Slack アプリの OAuth & Permissions で
+  トークンを Rotate（再発行）する。

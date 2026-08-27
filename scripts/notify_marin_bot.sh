@@ -7,7 +7,7 @@
 #   SLACK_MARIN_BOT_TOKEN=xoxb-... ./notify_marin_bot.sh "#チャンネル名" "メッセージ本文"
 #
 # チャンネルはチャンネルID (C0XXXXXXX) でも #名前 でも可。
-# 非公開チャンネルへは事前に /invite @TikTok朝ブリーフ が必要。
+# 非公開チャンネルへは事前に /invite @マリン秘書bot が必要。
 # 表示名/アイコンは環境変数 MARIN_BOT_USERNAME / MARIN_BOT_ICON で変更可能。
 
 set -euo pipefail
