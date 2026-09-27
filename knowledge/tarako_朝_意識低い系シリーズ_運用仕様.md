@@ -15,7 +15,9 @@
   - P1 表紙テキスト `PB7njWBhlSVTvZ6J-LB2VxCWd8zqsbDff-LBxrbvD5R3p4j73V`
   - 上カード（職場＋実声） P2 `PBqXYYz6cPGHL9lH-LBgJc5tcDWDzwFCx`／P3 `PBw9YB7hKjCr0jQT-LBwPf6bc9psG2YSg`／P4 `PBs14xllj5wjKcbY-LB7PLRLPPH4rMsWb`／P5 `PBlSxCBBcpKM98FM-LBRMr2hsqhDZxMGZ`／P6 `PBhtQzQj87rktZQz-LBwDpNsPY0CbJ1d6`
   - 吹き出しは P2 `PBqXYYz6cPGHL9lH-LBHgslsp1qKKHYsW`。P3〜P6 はコピー後に `read-design`（open_transaction）で要素IDを必ず実読して特定する（推測でIDを使わない）
-- 背景写真は手本のまま流用（辰己さんが投稿前に差し替える前提。Slack通知に「背景は手本流用」と明記）
+- **表紙（P1）の背景画像は絶対に変えない**（2026-09-27 辰己さん指示・恒久）。P1で触ってよいのはパート番号の丸数字だけ。背景・バッジ・文字位置・サイズも手本のまま
+- P2〜P6 の背景写真も手本のまま流用する（自動では差し替えない。Slack通知に「P2〜P6の背景は手本流用」と明記）
+- P7 は背景も文字も一切触らない
 
 ## 2. キャプション（毎回一語一句このまま・変更禁止）
 
@@ -69,4 +71,4 @@
    - Canva編集リンク
    - 各ページの上カード・吹き出しの全文と出典（返信者・いいね数）
    - キャプション（§2を一語一句そのまま、コードブロックで）
-   - 注意事項（背景は手本流用／ネタ残数＝未使用で使える実声の概数）
+   - 注意事項（表紙画像は手本のまま固定／P2〜P6の背景は手本流用／ネタ残数＝未使用で使える実声の概数）
