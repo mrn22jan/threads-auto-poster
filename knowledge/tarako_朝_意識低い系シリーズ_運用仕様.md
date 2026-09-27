@@ -66,7 +66,10 @@
 3. 台帳から実声を5つ選ぶ（§3）。揃わなければネタ切れ通知して終了
 4. Canva: 手本 DAHWZLL_0N4 を copy-design → タイトル `tarako_朝_意識低い系ゆるい働き方パート{丸数字}_{投稿日YYMMDD}` → P1のパート番号、P2〜P6の上カードと吹き出しを編集 → 全ページのサムネで崩れ確認 → commit。**P7は触らない**
 5. `tarako_朝シリーズ_使用ログ.csv` に5行追記（投稿予定日・パート・ページ・職場・返信者・引用文・Canva ID）→ commit → 同ブランチへ push
-6. Slack 通知（辰己さんDM `U0B5QNV6DPU`）：
+6. Slack 通知（送り先＝**#af-nurse-tiktok `C0B5ZRC4WE5`**・**マリン秘書bot名義**。2026-09-27 辰己さん指示）
+   - 送信方法：環境変数 `SLACK_MARIN_BOT_TOKEN` があれば Bash で `https://slack.com/api/chat.postMessage` に POST（`Authorization: Bearer $SLACK_MARIN_BOT_TOKEN`、本文は Python の `json.dumps` で作る、`channel`=`C0B5ZRC4WE5`、mrkdwn書式、レスポンスの `"ok":true` を必ず確認）。トークンをログや出力に表示しない
+   - 環境変数が無い／`ok:false` のとき：Slack MCP の `slack_send_message` で同じチャンネル `C0B5ZRC4WE5` に送り、本文の先頭に「⚠bot未設定のため辰己さん名義で送信」と書く
+   - 本文：
    - 見出し「たらこ朝 {投稿日} パート{丸数字} 投稿案」
    - Canva編集リンク
    - 各ページの上カード・吹き出しの全文と出典（返信者・いいね数）
